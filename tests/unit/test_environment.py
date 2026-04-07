@@ -80,6 +80,54 @@ def working_directory(path):
         os.chdir(prev_cwd)
 
 
+class TestParseExposePort:
+    @pytest.mark.parametrize(
+        "value, expected_key, expected_host",
+        [
+            ("5555", "5555/tcp", "5555"),
+            ("8081:9090", "9090/tcp", "8081"),
+            ("0", "0/tcp", "0"),
+        ],
+    )
+    def test_valid_port_formats(self, value, expected_key, expected_host):
+        key, host = environment.parse_expose_port(value)
+        assert key == expected_key
+        assert host == expected_host
+
+    @pytest.mark.parametrize(
+        "value",
+        ["abc", "abc:5555", "5555:abc", ""],
+    )
+    def test_invalid_port_formats(self, value):
+        with pytest.raises(errors.ComposerCliError):
+            environment.parse_expose_port(value)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["65536", "99999", "-1", "65536:5555", "5555:65536"],
+    )
+    def test_out_of_range_port_formats(self, value):
+        with pytest.raises(errors.ComposerCliError):
+            environment.parse_expose_port(value)
+
+    @mock.patch("composer_local_dev.environment.docker.from_env")
+    @mock.patch("composer_local_dev.environment.files.resolve_dags_path")
+    @mock.patch("composer_local_dev.environment.files.resolve_plugins_path")
+    def test_invalid_additional_port_rejected_at_init(
+        self, mocked_docker, mocked_dags, mocked_plugins, tmp_path
+    ):
+        """Invalid port spec must fail at Environment construction, not later."""
+        with pytest.raises(errors.ComposerCliError):
+            environment.Environment(
+                env_dir_path=tmp_path / "env",
+                project_id="",
+                image_version="composer-2.0.8-airflow-2.2.3",
+                location="location",
+                dags_path=str(tmp_path),
+                additional_ports=["not-a-port"],
+            )
+
+
 class TestEnvironment:
     @staticmethod
     def compare_envs(expected_env, actual_env):
@@ -428,6 +476,33 @@ class TestEnvironment:
             database_engine=constants.DatabaseEngine.sqlite3,
         )
         self.compare_envs(expected_env, env)
+
+    @mock.patch("composer_local_dev.environment.docker.from_env")
+    @mock.patch("composer_local_dev.environment.files.resolve_dags_path")
+    @mock.patch(
+        "composer_local_dev.environment.get_software_config_from_environment"
+    )
+    def test_from_source_with_additional_ports(
+        self, mocked_fn, mocked_dags, mocked_docker
+    ):
+        mocked_sw = mock.Mock()
+        mocked_sw.pypi_packages = {}
+        mocked_sw.airflow_config_overrides = {}
+        mocked_sw.env_variables = {}
+        mocked_sw.image_version = "composer-2.0.8-airflow-2.2.3"
+        mocked_fn.return_value = mocked_sw
+        env = environment.Environment.from_source_environment(
+            "test123",
+            "project",
+            "us-central1",
+            pathlib.Path("composer", "env_dir"),
+            8082,
+            str(pathlib.Path("dags")),
+            str(pathlib.Path("plugins")),
+            database_engine=constants.DatabaseEngine.postgresql,
+            additional_ports=["5555", "8081:9090"],
+        )
+        assert env.additional_ports == ["5555", "8081:9090"]
 
     @mock.patch("composer_local_dev.environment.docker.from_env")
     @pytest.mark.parametrize(
@@ -793,6 +868,45 @@ class TestEnvironment:
     @mock.patch("composer_local_dev.utils.resolve_gcloud_config_path")
     @mock.patch("composer_local_dev.utils.resolve_kube_config_path")
     @mock.patch("composer_local_dev.environment.get_image_mounts")
+    def test_create_docker_container_with_additional_ports(
+        self,
+        mocked_mounts,
+        mocked_resolve_kube_config_path,
+        mocked_resolve_gcloud_config_path,
+        default_env,
+    ):
+        mocked_resolve_kube_config_path.return_value = mock.Mock()
+        mocked_resolve_gcloud_config_path.return_value = mock.Mock()
+        default_env.additional_ports = ["5555", "8081:9090"]
+        default_env.create_docker_container()
+        call_kwargs = default_env.docker_client.containers.create.call_args[1]
+        assert call_kwargs["ports"] == {
+            "8080/tcp": default_env.port,
+            "5555/tcp": "5555",
+            "9090/tcp": "8081",
+        }
+
+    @pytest.mark.parametrize("port_spec", ["9090:8080", "8080"])
+    @mock.patch("composer_local_dev.utils.resolve_gcloud_config_path")
+    @mock.patch("composer_local_dev.utils.resolve_kube_config_path")
+    @mock.patch("composer_local_dev.environment.get_image_mounts")
+    def test_create_docker_container_port_8080_conflict(
+        self,
+        mocked_mounts,
+        mocked_resolve_kube_config_path,
+        mocked_resolve_gcloud_config_path,
+        default_env,
+        port_spec,
+    ):
+        mocked_resolve_kube_config_path.return_value = mock.Mock()
+        mocked_resolve_gcloud_config_path.return_value = mock.Mock()
+        default_env.additional_ports = [port_spec]
+        with pytest.raises(errors.ComposerCliError):
+            default_env.create_docker_container()
+
+    @mock.patch("composer_local_dev.utils.resolve_gcloud_config_path")
+    @mock.patch("composer_local_dev.utils.resolve_kube_config_path")
+    @mock.patch("composer_local_dev.environment.get_image_mounts")
     def test_create_db_docker_container(
         self,
         mocked_mounts,
@@ -944,6 +1058,7 @@ class TestEnvironment:
             dags_path=default_env.dags_path,
             plugins_path=default_env.plugins_path,
             gcloud_path="path",
+            additional_ports_msg="",
         )
         kub_desc = constants.KUBECONFIG_PATH_MESSAGE.format(
             kube_config_path="path/kube",
@@ -973,7 +1088,7 @@ class TestEnvironment:
             dags_path=default_env.dags_path,
             plugins_path=default_env.plugins_path,
             gcloud_path="path",
-            kube_config_path="path/kube",
+            additional_ports_msg="",
         )
         kub_desc = constants.KUBECONFIG_PATH_MESSAGE.format(
             kube_config_path="path/kube",
@@ -983,6 +1098,18 @@ class TestEnvironment:
         description = default_env.prepare_env_description(env_state)
 
         assert exp_desc + kub_desc + final_desc == description
+
+    @mock.patch("composer_local_dev.utils.resolve_gcloud_config_path")
+    @mock.patch("composer_local_dev.utils.resolve_kube_config_path")
+    def test_prepare_env_description_with_additional_ports(
+        self, mocked_kube_config, mocked_gcloud, default_env
+    ):
+        mocked_gcloud.return_value = "path"
+        mocked_kube_config.return_value = None
+        default_env.additional_ports = ["5555", "8081:9090"]
+        default_env.get_host_port = mock.Mock(return_value=8080)
+        description = default_env.prepare_env_description("running")
+        assert "Additional exposed ports: 5555, 8081:9090" in description
 
     @mock.patch("composer_local_dev.utils.resolve_gcloud_config_path")
     @mock.patch("composer_local_dev.utils.resolve_kube_config_path")
@@ -1558,3 +1685,117 @@ class TestEnvironmentConfig:
         with pytest.raises(errors.FailedToParseConfigParamIntRangeError) as err:
             environment.EnvironmentConfig(tmp_path, None)
             assert str(err) == exp_error
+
+    @mock.patch(
+        "composer_local_dev.environment.EnvironmentConfig.load_configuration_from_file"
+    )
+    def test_additional_ports_defaults_to_empty_list(
+        self, mocked_load_conf, tmp_path
+    ):
+        """Old config.json without additional_ports key should not fail."""
+        config = {
+            "composer_image_version": "composer-2.0.25-airflow-2.2.5",
+            "composer_location": "us-central1",
+            "composer_project_id": "project",
+            "dags_path": "/dags/",
+            "plugins_path": "/plugins/",
+            "dag_dir_list_interval": 10,
+            "port": 8080,
+            "database_engine": "postgresql",
+        }
+        mocked_load_conf.return_value = config
+        config_obj = environment.EnvironmentConfig(tmp_path, None)
+        assert config_obj.additional_ports == []
+
+    @mock.patch(
+        "composer_local_dev.environment.EnvironmentConfig.load_configuration_from_file"
+    )
+    def test_additional_ports_loaded_from_config(
+        self, mocked_load_conf, tmp_path
+    ):
+        config = {
+            "composer_image_version": "composer-2.0.25-airflow-2.2.5",
+            "composer_location": "us-central1",
+            "composer_project_id": "project",
+            "dags_path": "/dags/",
+            "plugins_path": "/plugins/",
+            "dag_dir_list_interval": 10,
+            "port": 8080,
+            "database_engine": "postgresql",
+            "additional_ports": ["5555", "8081:9090"],
+        }
+        mocked_load_conf.return_value = config
+        config_obj = environment.EnvironmentConfig(tmp_path, None)
+        assert config_obj.additional_ports == ["5555", "8081:9090"]
+
+    @mock.patch(
+        "composer_local_dev.environment.EnvironmentConfig.load_configuration_from_file"
+    )
+    def test_additional_ports_override_from_cli(
+        self, mocked_load_conf, tmp_path
+    ):
+        config = {
+            "composer_image_version": "composer-2.0.25-airflow-2.2.5",
+            "composer_location": "us-central1",
+            "composer_project_id": "project",
+            "dags_path": "/dags/",
+            "plugins_path": "/plugins/",
+            "dag_dir_list_interval": 10,
+            "port": 8080,
+            "database_engine": "postgresql",
+            "additional_ports": ["5555"],
+        }
+        mocked_load_conf.return_value = config
+        config_obj = environment.EnvironmentConfig(
+            tmp_path, None, additional_ports=["9090"]
+        )
+        assert config_obj.additional_ports == ["9090"]
+
+    @mock.patch(
+        "composer_local_dev.environment.EnvironmentConfig.load_configuration_from_file"
+    )
+    def test_additional_ports_invalid_type_in_config(
+        self, mocked_load_conf, tmp_path
+    ):
+        config = {
+            "composer_image_version": "composer-2.0.25-airflow-2.2.5",
+            "composer_location": "us-central1",
+            "composer_project_id": "project",
+            "dags_path": "/dags/",
+            "plugins_path": "/plugins/",
+            "dag_dir_list_interval": 10,
+            "port": 8080,
+            "database_engine": "postgresql",
+            "additional_ports": "5555",
+        }
+        mocked_load_conf.return_value = config
+        with pytest.raises(errors.ComposerCliError):
+            environment.EnvironmentConfig(tmp_path, None)
+
+
+@mock.patch("composer_local_dev.environment.docker.from_env")
+@mock.patch("composer_local_dev.environment.files.resolve_dags_path")
+@mock.patch("composer_local_dev.environment.files.resolve_plugins_path")
+def test_additional_ports_written_and_reloaded(
+    mocked_plugins, mocked_dags, mocked_docker, tmp_path
+):
+    """additional_ports survives a write/read round-trip via config.json."""
+    env_dir = tmp_path / "composer" / "my_env"
+    env_dir.mkdir(parents=True)
+    mocked_dags.return_value = str(tmp_path / "dags")
+    mocked_plugins.return_value = str(tmp_path / "plugins")
+    env = environment.Environment(
+        env_dir_path=env_dir,
+        project_id="project",
+        image_version="composer-2.0.8-airflow-2.2.3",
+        location="us-central1",
+        dags_path=str(tmp_path / "dags"),
+        plugins_path=str(tmp_path / "plugins"),
+        dag_dir_list_interval=10,
+        additional_ports=["5555", "8081:9090"],
+    )
+    env.write_environment_config_to_config_file()
+    import json
+
+    written = json.loads((env_dir / "config.json").read_text())
+    assert written["additional_ports"] == ["5555", "8081:9090"]

@@ -104,6 +104,38 @@ def test_create_no_plugins_path(mocked_env):
     assert exp_plugins_path == env_kwargs.get("plugins_path")
 
 
+@mock.patch("composer_local_dev.cli.composer_environment.Environment")
+def test_create_no_expose_ports(mocked_env):
+    run_composer_and_assert_exit_code(
+        "create --project 123 --from-image-version composer-2.0.16-airflow-2.2.5 test",
+        exit_code=0,
+    )
+    _, env_kwargs = mocked_env.call_args
+    assert env_kwargs.get("additional_ports") == []
+
+
+@mock.patch("composer_local_dev.cli.composer_environment.Environment")
+def test_create_with_expose_port(mocked_env):
+    run_composer_and_assert_exit_code(
+        "create --project 123 --from-image-version composer-2.0.16-airflow-2.2.5 "
+        "--expose-port 5555 test",
+        exit_code=0,
+    )
+    _, env_kwargs = mocked_env.call_args
+    assert env_kwargs.get("additional_ports") == ["5555"]
+
+
+@mock.patch("composer_local_dev.cli.composer_environment.Environment")
+def test_create_with_multiple_expose_ports(mocked_env):
+    run_composer_and_assert_exit_code(
+        "create --project 123 --from-image-version composer-2.0.16-airflow-2.2.5 "
+        "--expose-port 5555 --expose-port 8081:9090 test",
+        exit_code=0,
+    )
+    _, env_kwargs = mocked_env.call_args
+    assert env_kwargs.get("additional_ports") == ["5555", "8081:9090"]
+
+
 class TestCreateCommandProjectId:
     @mock.patch("composer_local_dev.cli.utils.get_project_id", autospec=True)
     @mock.patch(
@@ -182,15 +214,21 @@ class TestStartRestartCommand:
         ) as mock_check:
             yield mock_check
 
-    def assert_env_loaded(self, mocked_env, env_path, port=None):
-        mocked_env.load_from_config.assert_called_with(env_path, port)
+    def assert_env_loaded(
+        self, mocked_env, env_path, port=None, additional_ports=None
+    ):
+        mocked_env.load_from_config.assert_called_with(
+            env_path, port, additional_ports
+        )
 
-    def assert_run_command(self, command, mocked_env, env_path, port=None):
+    def assert_run_command(
+        self, command, mocked_env, env_path, port=None, additional_ports=None
+    ):
         run_composer_and_assert_exit_code(
             command,
             exit_code=0,
         )
-        self.assert_env_loaded(mocked_env, env_path, port)
+        self.assert_env_loaded(mocked_env, env_path, port, additional_ports)
 
     @pytest.mark.parametrize("command", ["start", "restart"])
     def test_start_command(
@@ -226,6 +264,36 @@ class TestStartRestartCommand:
         self, mocked_env, mocked_resolve_env, env_path, command
     ):
         self.assert_run_command(command, mocked_env, env_path)
+
+    @pytest.mark.parametrize("command", ["start", "restart"])
+    def test_start_command_no_expose_ports_passes_none(
+        self, mocked_env, mocked_resolve_env, env_path, command
+    ):
+        """No --expose-port flag must pass None so config.json value is used."""
+        self.assert_run_command(
+            command, mocked_env, env_path, additional_ports=None
+        )
+
+    @pytest.mark.parametrize("command", ["start", "restart"])
+    def test_start_command_with_expose_port(
+        self, mocked_env, mocked_resolve_env, env_path, command
+    ):
+        command += " --expose-port 5555"
+        self.assert_run_command(
+            command, mocked_env, env_path, additional_ports=["5555"]
+        )
+
+    @pytest.mark.parametrize("command", ["start", "restart"])
+    def test_start_command_with_multiple_expose_ports(
+        self, mocked_env, mocked_resolve_env, env_path, command
+    ):
+        command += " --expose-port 5555 --expose-port 8081:9090"
+        self.assert_run_command(
+            command,
+            mocked_env,
+            env_path,
+            additional_ports=["5555", "8081:9090"],
+        )
 
 
 class TestStopCommand:

@@ -137,6 +137,7 @@ composer-dev create \
   --from-image-version IMAGE_VERSION \
   --project PROJECT_ID \
   --port WEB_SERVER_PORT \
+  --expose-port PORT_MAPPING \
   --dags-path LOCAL_DAGS_PATH \
   --plugins-path LOCAL_PLUGINS_PATH \
   --database DATABASE_ENGINE \
@@ -148,6 +149,9 @@ Replace:
 - `IMAGE_VERSION` with the name of the Cloud Composer image.
 - `PROJECT_ID` with the [Project ID][4].
 - `WEB_SERVER_PORT` with the port that Airflow web server must listen at.
+- `PORT_MAPPING` with an additional container port to expose, in
+    `CONTAINER_PORT` or `HOST_PORT:CONTAINER_PORT` format (e.g. `5555` or
+    `8081:9090`). Repeat the flag to expose multiple ports.
 - `LOCAL_DAGS_PATH` with the path to a local directory where the DAG files are
     located.
 - `LOCAL_PLUGINS_PATH` with the path to a local directory where the plugins
@@ -199,6 +203,7 @@ composer-dev create LOCAL_ENVIRONMENT_NAME \
     --location LOCATION \
     --project PROJECT_ID \
     --port WEB_SERVER_PORT \
+    --expose-port PORT_MAPPING \
     --dags-path LOCAL_DAGS_PATH \
     --plugins-path LOCAL_PLUGINS_PATH
 ```
@@ -211,6 +216,9 @@ Replace:
     located.
 - `PROJECT_ID` with the [Project ID][4].
 - `WEB_SERVER_PORT` with a port for the local Airflow web server.
+- `PORT_MAPPING` with an additional container port to expose, in
+    `CONTAINER_PORT` or `HOST_PORT:CONTAINER_PORT` format. Repeat to expose
+    multiple ports.
 - `LOCAL_DAGS_PATH` with a path to a local directory where the DAGs are
     located.
 - `LOCAL_PLUGINS_PATH` with a path to a local directory where the plugins are
@@ -279,6 +287,19 @@ To start a local Airflow environment, run:
 composer-dev start LOCAL_ENVIRONMENT_NAME
 ```
 
+You can override the web server port or expose additional container ports at
+start time:
+
+```bash
+composer-dev start LOCAL_ENVIRONMENT_NAME \
+  --port 8082 \
+  --expose-port 5555 \
+  --expose-port 8081:9090
+```
+
+When `--expose-port` is not specified, the ports saved in `config.json` are
+used. Specifying `--expose-port` replaces the saved list for that run only.
+
 ## Stop or restart a local Airflow environments
 
 When you restart a local Airflow environment, Composer Local Development CLI
@@ -291,6 +312,9 @@ To restart or start a stopped local Airflow environment, run:
 ```bash
 composer-dev restart LOCAL_ENVIRONMENT_NAME
 ```
+
+The `--expose-port` option is also available on the `restart` command and
+follows the same behaviour as `start`.
 
 To stop a local Airflow environment, run:
 

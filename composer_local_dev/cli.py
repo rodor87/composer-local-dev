@@ -47,16 +47,33 @@ click.rich_click.OPTION_GROUPS = {
         },
         {
             "name": "Environment options",
-            "options": ["--web-server-port", "--dags-path", "--plugins-path"],
+            "options": [
+                "--web-server-port",
+                "--expose-port",
+                "--dags-path",
+                "--plugins-path",
+            ],
         },
         {
             "name": "Container Memory and CPUs limit",
             "options": ["--container-memory-limit", "--container-cpu-limit"],
         },
     ],
-    "composer-dev start": [COMMON_OPTIONS],
+    "composer-dev start": [
+        COMMON_OPTIONS,
+        {
+            "name": "Environment options",
+            "options": ["--web-server-port", "--expose-port"],
+        },
+    ],
     "composer-dev stop": [COMMON_OPTIONS],
-    "composer-dev restart": [COMMON_OPTIONS],
+    "composer-dev restart": [
+        COMMON_OPTIONS,
+        {
+            "name": "Environment options",
+            "options": ["--web-server-port", "--expose-port"],
+        },
+    ],
     "composer-dev logs": [COMMON_OPTIONS],
     "composer-dev remove": [COMMON_OPTIONS],
     "composer-dev list_available_versions": [COMMON_OPTIONS],
@@ -177,6 +194,18 @@ option_port = click.option(
     metavar="PORT",
 )
 
+option_expose_port = click.option(
+    "--expose-port",
+    "expose_ports",
+    multiple=True,
+    help=(
+        "Expose an additional container port to the host. "
+        "Accepts CONTAINER_PORT or HOST_PORT:CONTAINER_PORT format. "
+        "Can be repeated."
+    ),
+    metavar="PORT_MAPPING",
+)
+
 
 required_environment = click.argument(
     "environment",
@@ -234,6 +263,7 @@ option_location = click.option(
 )
 @option_location
 @option_port
+@option_expose_port
 @click.option(
     "--dags-path",
     help="Path to DAGs folder. If it does not exist, it will be created.",
@@ -267,6 +297,7 @@ def create(
     project: Optional[str],
     location: str,
     web_server_port: Optional[int],
+    expose_ports: tuple,
     environment: str,
     verbose: bool,
     debug: bool,
@@ -332,6 +363,7 @@ def create(
             database_engine=database_engine,
             memory_limit=container_memory_limit,
             cpu_count=container_cpu_limit,
+            additional_ports=list(expose_ports),
         )
     else:
         env = composer_environment.Environment(
@@ -340,6 +372,7 @@ def create(
             location=location,
             env_dir_path=env_dir,
             port=web_server_port,
+            additional_ports=list(expose_ports),
             dags_path=dags_path,
             plugins_path=plugins_path,
             database_engine=database_engine,
@@ -352,12 +385,14 @@ def create(
 @cli.command()
 @optional_environment
 @option_port
+@option_expose_port
 @verbose_mode
 @debug_mode
 @errors.catch_exceptions()
 def start(
     environment: Optional[str],
     web_server_port: Optional[int],
+    expose_ports: tuple,
     verbose: bool,
     debug: bool,
 ):
@@ -365,7 +400,7 @@ def start(
     utils.setup_logging(verbose, debug)
     env_path = files.resolve_environment_path(environment)
     env = composer_environment.Environment.load_from_config(
-        env_path, web_server_port
+        env_path, web_server_port, list(expose_ports) if expose_ports else None
     )
     console.get_console().print(f"Starting {env.name} composer environment...")
     env.start()
@@ -392,12 +427,14 @@ def stop(environment: Optional[str], verbose: bool, debug: bool):
 @cli.command()
 @optional_environment
 @option_port
+@option_expose_port
 @verbose_mode
 @debug_mode
 @errors.catch_exceptions()
 def restart(
     environment: Optional[str],
     web_server_port: Optional[int],
+    expose_ports: tuple,
     verbose: bool,
     debug: bool,
 ):
@@ -410,7 +447,7 @@ def restart(
     utils.setup_logging(verbose, debug)
     env_path = files.resolve_environment_path(environment)
     env = composer_environment.Environment.load_from_config(
-        env_path, web_server_port
+        env_path, web_server_port, list(expose_ports) if expose_ports else None
     )
     env.restart()
 

@@ -101,6 +101,27 @@ def parse_env_variable(
     return key.strip(), value.strip()
 
 
+def parse_expose_port(value: str) -> Tuple[str, str]:
+    """Parse 'CONTAINER_PORT' or 'HOST_PORT:CONTAINER_PORT' into
+    (container_port_key, host_port) suitable for the Docker ports dict."""
+    if ":" in value:
+        host_port, container_port = value.split(":", maxsplit=1)
+    else:
+        host_port = container_port = value
+    try:
+        host_port_int = int(host_port)
+        container_port_int = int(container_port)
+    except ValueError:
+        raise errors.ComposerCliError(
+            constants.INVALID_EXPOSE_PORT_FORMAT_ERROR.format(value=value)
+        )
+    if not (0 <= host_port_int <= 65535) or not (0 <= container_port_int <= 65535):
+        raise errors.ComposerCliError(
+            constants.INVALID_EXPOSE_PORT_FORMAT_ERROR.format(value=value)
+        )
+    return f"{container_port}/tcp", host_port
+
+
 def load_environment_variables(env_dir_path: pathlib.Path) -> Dict:
     """
     Load environment variable to be sourced in the local Composer environment.
@@ -358,7 +379,12 @@ def get_environments_status(
 
 
 class EnvironmentConfig:
-    def __init__(self, env_dir_path: pathlib.Path, port: Optional[int]):
+    def __init__(
+        self,
+        env_dir_path: pathlib.Path,
+        port: Optional[int],
+        additional_ports: Optional[List[str]] = None,
+    ):
         self.env_dir_path = env_dir_path
         self.config = self.load_configuration_from_file()
         self.project_id = self.get_str_param("composer_project_id")
@@ -382,6 +408,16 @@ class EnvironmentConfig:
             else self.parse_int_param("port", allowed_range=(0, 65536))
         )
         self.database_engine = self.get_str_param("database_engine")
+        raw_ports = (
+            additional_ports
+            if additional_ports is not None
+            else self.config.get("additional_ports", [])
+        )
+        if not isinstance(raw_ports, list):
+            raise errors.ComposerCliError(
+                constants.ADDITIONAL_PORTS_MUST_BE_LIST_ERROR
+            )
+        self.additional_ports = raw_ports
 
     def load_configuration_from_file(self) -> Dict:
         """
@@ -462,6 +498,7 @@ class Environment:
         memory_limit: Optional[str] = None,
         cpu_count: Optional[int] = None,
         port: Optional[int] = None,
+        additional_ports: Optional[List[str]] = None,
         pypi_packages: Optional[Dict] = None,
         environment_vars: Optional[Dict] = None,
     ):
@@ -494,6 +531,15 @@ class Environment:
             self.database_engine == constants.DatabaseEngine.sqlite3
         )
         self.port: int = port if port is not None else 8080
+        self.additional_ports: List[str] = (
+            additional_ports if additional_ports is not None else []
+        )
+        for spec in self.additional_ports:
+            container_key, _ = parse_expose_port(spec)
+            if container_key == "8080/tcp":
+                raise errors.ComposerCliError(
+                    constants.EXPOSE_PORT_8080_RESERVED_ERROR
+                )
         self.pypi_packages = (
             pypi_packages if pypi_packages is not None else dict()
         )
@@ -548,9 +594,14 @@ class Environment:
                 )
 
     @classmethod
-    def load_from_config(cls, env_dir_path: pathlib.Path, port: Optional[int]):
+    def load_from_config(
+        cls,
+        env_dir_path: pathlib.Path,
+        port: Optional[int],
+        additional_ports: Optional[List[str]] = None,
+    ):
         """Create local environment using 'config.json' configuration file."""
-        config = EnvironmentConfig(env_dir_path, port)
+        config = EnvironmentConfig(env_dir_path, port, additional_ports)
         environment_vars = load_environment_variables(env_dir_path)
         Environment.assert_valid_environment_configuration(
             config, environment_vars
@@ -565,6 +616,7 @@ class Environment:
             plugins_path=config.plugins_path,
             dag_dir_list_interval=config.dag_dir_list_interval,
             port=config.port,
+            additional_ports=config.additional_ports,
             database_engine=config.database_engine,
             memory_limit=config.memory_limit,
             cpu_count=config.cpu_count,
@@ -584,6 +636,7 @@ class Environment:
         database_engine: str,
         memory_limit: Optional[str] = None,
         cpu_count: Optional[int] = None,
+        additional_ports: Optional[List[str]] = None,
     ):
         """
         Create Environment using configuration retrieved from Composer
@@ -608,6 +661,7 @@ class Environment:
             plugins_path=plugins_path,
             dag_dir_list_interval=10,
             port=web_server_port,
+            additional_ports=additional_ports,
             pypi_packages=pypi_packages,
             environment_vars=env_variables,
             database_engine=database_engine,
@@ -723,6 +777,7 @@ class Environment:
             "database_engine": self.database_engine,
             "memory_limit": self.container_memory_limit,
             "cpu_count": self.container_cpu_count,
+            "additional_ports": self.additional_ports,
         }
         with open(self.env_dir_path / "config.json", "w") as fp:
             json.dump(config, fp, indent=4)
@@ -812,9 +867,14 @@ class Environment:
                 "COMPOSER_CONTAINER_RUN_AS_HOST_USER must be set to `False` on Windows"
             )
 
-        ports = {
-            f"8080/tcp": self.port,
-        }
+        ports = {"8080/tcp": self.port}
+        for spec in self.additional_ports:
+            container_key, host_port = parse_expose_port(spec)
+            if container_key == "8080/tcp":
+                raise errors.ComposerCliError(
+                    constants.EXPOSE_PORT_8080_RESERVED_ERROR
+                )
+            ports[container_key] = host_port
         entrypoint = f"bash {constants.ENTRYPOINT_PATH}"
         memory_limit = (
             self.container_memory_limit
@@ -1268,6 +1328,11 @@ class Environment:
             web_url = ""
         env_status = utils.wrap_status_in_color(env_status)
 
+        additional_ports_msg = ""
+        if self.additional_ports:
+            additional_ports_msg = (
+                f"Additional exposed ports: {', '.join(self.additional_ports)}\n"
+            )
         return (
             constants.DESCRIBE_ENV_MESSAGE.format(
                 name=self.name,
@@ -1277,6 +1342,7 @@ class Environment:
                 dags_path=self.dags_path,
                 plugins_path=self.plugins_path,
                 gcloud_path=utils.resolve_gcloud_config_path(),
+                additional_ports_msg=additional_ports_msg,
             )
             + (
                 constants.KUBECONFIG_PATH_MESSAGE.format(
