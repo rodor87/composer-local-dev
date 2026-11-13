@@ -107,6 +107,9 @@ Plugins directory: {plugins_path}.
 Data directory: {data_path}.
 The environment is using credentials from gcloud located at {gcloud_path}.
 """
+ADDITIONAL_PORTS_MESSAGE = """
+Additional exposed ports: {ports}.
+"""
 KUBECONFIG_PATH_MESSAGE = """
 The environment is using K8S credentials located at {kube_config_path}.
 """
@@ -207,6 +210,20 @@ PORT_IN_USE_ERROR = (
     "Please use different port or close application using port {port}.\n"
     "You can select different port by using --port option when starting "
     "environment."
+)
+INVALID_EXPOSE_PORT_FORMAT_ERROR = (
+    "Invalid port format '{value}'. "
+    "Expected CONTAINER_PORT or HOST_PORT:CONTAINER_PORT "
+    "(e.g. '5555' or '8081:9090'). "
+    "Ports must be integers in the range 0-65535."
+)
+EXPOSE_PORT_8080_RESERVED_ERROR = (
+    "Container port 8080 is reserved for the Airflow web server. "
+    "Use --port to change the host port for the web server."
+)
+ADDITIONAL_PORTS_MUST_BE_LIST_ERROR = (
+    "Configuration parameter 'additional_ports' in config.json "
+    "must be a list of port mapping strings."
 )
 ENVIRONMENT_FAILED_TO_START_ERROR = "Environment failed to start."
 ENV_DID_NOT_START_TIMEOUT_ERROR = (
